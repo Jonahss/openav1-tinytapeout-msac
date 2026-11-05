@@ -2,7 +2,16 @@
 # See https://docs.cocotb.org/en/stable/quickstart.html for more info
 
 # defaults
-SIM ?= verilator
+SIM ?= icarus
+# icarus >= 12 (the CI runner has 12, the GL action 13): icarus 11 stalls on this RTL under cocotb (2026-11-05)
+# Waveforms: make WAVES=1 (off by default; see tb.v)
+ifeq ($(WAVES),1)
+COMPILE_ARGS += -DWAVES
+endif
+# Verilator (make SIM=verilator, ~4x faster for the RTL run) needs --timing for tb.v
+ifeq ($(SIM),verilator)
+EXTRA_ARGS += --timing
+endif
 FST ?= -fst # Use more efficient FST format
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src

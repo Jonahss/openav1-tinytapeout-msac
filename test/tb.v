@@ -7,11 +7,14 @@
 module tb ();
 
   // Dump the signals to a FST file. You can view it with gtkwave or surfer.
+  // Waves only on request (make WAVES=1): the full 40k-symbol replay is ~0.5 GB of FST at gate level.
+`ifdef WAVES
   initial begin
     $dumpfile("tb.fst");
     $dumpvars(0, tb);
     #1;
   end
+`endif
 
   // Wire up the inputs and outputs:
   reg clk;
