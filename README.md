@@ -1,42 +1,43 @@
-![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg) ![](../../workflows/fpga/badge.svg)
+![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg)
 
-# Tiny Tapeout Verilog Project Template
+# openav1 msac on Tiny Tapeout: the AV1 symbol decoder
 
-- [Read the documentation for project](docs/info.md)
+The arithmetic (symbol) decoder of [openav1](https://github.com/Jonahss/openav1), an open-source AV1 hardware video
+decoder, on a [Tiny Tapeout](https://tinytapeout.com) chip (SkyWater 130 nm, 8x2 tiles). `src/msac.sv` is the same
+file the FPGA decoder runs, proven there bit-exact over the Argon conformance streams; here it sits behind a
+byte-wide register window on the 24 pins. Datasheet: [docs/info.md](docs/info.md).
+
+Written by Claw, the AI agent that wrote openav1's RTL, models and test benches; Jonah Stiennon runs the project.
+
+## What is here
+
+| path | what |
+|---|---|
+| `src/msac.sv`, `src/cdf_map_pkg.sv` | the core, unmodified from openav1 |
+| `src/tt_um_jonahss_msac.sv` | the pin wrapper: register window, input synchronisers, 4-byte stream FIFO |
+| `test/msac_host.py` | the host protocol, written once as a generator of pin operations |
+| `test/test.py` | cocotb: replays dav1d golden symbol traces over the pins through a deliberately sloppy host (jittered waits, data a clock after the strobe) and checks every symbol, range, adapted CDF row and counter |
+| `test/vectors/` | 40,360 symbols: 8-bit 4:4:4 (2 tiles), 10-bit, Argon test10001 (4 tiles with `disable_cdf_update`, tile reordering; 2 tiles) |
+| `fpga/kv260/` | the chip's twin on a Kria KV260: this exact `tt_um` module behind its 24 pins on an AXI GPIO, on its own clock, driven by `twin.py` with the same host protocol |
+
+## Run the tests
+
+```sh
+cd test
+make                        # RTL, icarus >= 12 (make SIM=verilator is ~4x faster)
+make GATES=yes              # gate level: copy the hardened netlist to test/gate_level_netlist.v first
+MSAC_TRACE=vectors/argon10001_f5_2tiles.txt make     # one trace; MSAC_MAX_SYMS caps it, WAVES=1 dumps tb.fst
+```
+
+## Status (2026-11-05)
+
+- Hardened with Tiny Tapeout's flow (LibreLane 3.0.14, sky130A): 8x2 tiles, 62 % utilisation, 0 DRC / LVS /
+  antenna errors; 50 MHz closes in the typical corner (+5.1 ns), the slow corner closes at ~39 MHz; run it at
+  <= 35 MHz.
+- RTL and gate-level replays: 40,360 symbols, all match. Tiny Tapeout precheck: pass.
+- The KV260 twin bitstream builds (WNS +6.2 ns); the board run is pending.
 
 ## What is Tiny Tapeout?
 
-Tiny Tapeout is an educational project that aims to make it easier and cheaper than ever to get your digital and analog designs manufactured on a real chip.
-
-To learn more and get started, visit https://tinytapeout.com.
-
-## Set up your Verilog project
-
-1. Add your Verilog files to the `src` folder.
-2. Edit the [info.yaml](info.yaml) and update information about your project, paying special attention to the `source_files` and `top_module` properties. If you are upgrading an existing Tiny Tapeout project, check out our [online info.yaml migration tool](https://tinytapeout.github.io/tt-yaml-upgrade-tool/).
-3. Edit [docs/info.md](docs/info.md) and add a description of your project.
-4. Adapt the testbench to your design. See [test/README.md](test/README.md) for more information.
-
-The GitHub action will automatically build the ASIC files using [LibreLane](https://www.zerotoasiccourse.com/terminology/librelane/).
-
-## Enable GitHub actions to build the results page
-
-- [Enabling GitHub Pages](https://tinytapeout.com/faq/#my-github-action-is-failing-on-the-pages-part)
-
-## Resources
-
-- [FAQ](https://tinytapeout.com/faq/)
-- [Digital design lessons](https://tinytapeout.com/digital_design/)
-- [Learn how semiconductors work](https://tinytapeout.com/siliwiz/)
-- [Join the community](https://tinytapeout.com/discord)
-- [Build your design locally](https://www.tinytapeout.com/guides/local-hardening/)
-
-## What next?
-
-- [Submit your design to the next shuttle](https://app.tinytapeout.com/).
-- Edit [this README](README.md) and explain your design, how it works, and how to test it.
-- Share your project on your social network of choice:
-  - LinkedIn [#tinytapeout](https://www.linkedin.com/search/results/content/?keywords=%23tinytapeout) [@TinyTapeout](https://www.linkedin.com/company/100708654/)
-  - Mastodon [#tinytapeout](https://chaos.social/tags/tinytapeout) [@matthewvenn](https://chaos.social/@matthewvenn)
-  - X (formerly Twitter) [#tinytapeout](https://twitter.com/hashtag/tinytapeout) [@tinytapeout](https://twitter.com/tinytapeout)
-  - Bluesky [@tinytapeout.com](https://bsky.app/profile/tinytapeout.com)
+Tiny Tapeout is an educational project that makes it easier and cheaper than ever to get digital and analog designs
+manufactured on a real chip. Learn more at https://tinytapeout.com.
