@@ -10,6 +10,7 @@ set_property target_language Verilog [current_project]
 add_files -norecurse [list $root/src/cdf_map_pkg.sv $root/src/msac.sv $root/src/tt_um_jonahss_msac.sv $root/fpga/kv260/tt_twin_v.v]
 set_property file_type SystemVerilog [get_files -filter {NAME =~ *.sv}]
 add_files -fileset constrs_1 -norecurse $root/fpga/kv260/tt_twin.xdc
+set_property USED_IN_SYNTHESIS false [get_files tt_twin.xdc]   ;# the PS clocks exist only after synthesis
 update_compile_order -fileset sources_1
 
 create_bd_design sys
