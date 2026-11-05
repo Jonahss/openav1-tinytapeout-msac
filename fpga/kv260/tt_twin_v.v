@@ -12,7 +12,6 @@
 `default_nettype none
 module tt_twin_v (
     (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 chip_clk CLK" *)
-    (* X_INTERFACE_PARAMETER = "FREQ_HZ 50000000" *)
     input  wire        chip_clk,
     input  wire [31:0] gpio_o,
     output wire [31:0] gpio_i
