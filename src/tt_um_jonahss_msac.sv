@@ -4,9 +4,16 @@
 //
 // Pins:
 //   ui_in[6:0]  register address (0x00..0x7F)
-//   ui_in[7]    write strobe: while high, the byte on uio is written to the addressed register on every clock (data
-//               registers are idempotent; the control register and the stream push act once per strobe edge)
+//   ui_in[7]    write strobe: while high, the byte on uio is written to the addressed register (data registers are
+//               idempotent; the control register and the stream push act once per strobe)
 //   uio[7:0]    data: driven by the host while ui_in[7] is high, by the chip (the addressed byte) while it is low
+//
+// The host is asynchronous to clk (the demo board's RP2040 drives the pins from software): ui_in and uio_in pass a
+// two-flop synchroniser, and a write acts only once strobe, address and data have been stable for two synchronised
+// clocks, so pin skew around a clock edge can never latch a wrong control byte or stream byte. Host timing: set the
+// address with the strobe low, then raise the strobe and drive the data in one atomic pin write, hold >= 4 clocks,
+// release both in one write, hold >= 4 clocks; a read: set the address, wait >= 4 clocks, sample uio. uio_oe follows
+// the raw strobe pin so the chip lets go of uio as soon as the strobe rises.
 //   uo_out[7:0] the status byte, always: {resp_sym[3:0], wb_valid, in_ready, req_ready, resp_valid}
 //
 // Registers (write):
@@ -35,8 +42,16 @@ module tt_um_jonahss_msac (
     input  wire       rst_n
 );
     wire rst = !rst_n;
-    wire [6:0] addr = ui_in[6:0];
-    wire       wr   = ui_in[7];
+
+    // ---- input synchronisers ----
+    logic [7:0] ui_s1, ui_s2, uio_s1, uio_s2;
+    always_ff @(posedge clk) begin
+        ui_s1 <= ui_in;   ui_s2 <= ui_s1;
+        uio_s1 <= uio_in; uio_s2 <= uio_s1;
+    end
+    wire [6:0] addr = ui_s2[6:0];
+    wire       wr   = ui_s2[7];
+    wire [7:0] din  = uio_s2;
 
     // ---- request registers ----
     logic [239:0] r_cdf;
@@ -44,9 +59,13 @@ module tt_um_jonahss_msac (
     logic [1:0]   r_kind;
     logic [5:0]   r_cnt;
     logic         r_upd, r_eos;
-    logic         wr_prev;                       // for the once-per-strobe-edge registers
+    logic         wr_prev, hold_prev;
     logic [6:0]   addr_prev;
-    wire  wr_edge = wr && !(wr_prev && addr_prev == addr);
+    logic [7:0]   din_prev;
+    // hold: strobe, address and data unchanged since the last clock; wr_edge: the first such clock of a strobe
+    wire  hold    = wr && wr_prev && addr_prev == addr && din_prev == din;
+    wire  wr_edge = hold && !hold_prev;
+    wire  do_init = wr_edge && addr == 7'h20 && din[0];
 
     // ---- core handshake ----
     logic req_pending, init_pulse;
@@ -69,29 +88,34 @@ module tt_um_jonahss_msac (
     always_ff @(posedge clk) begin
         if (rst) begin
             r_cdf <= '0; r_n <= 4'd1; r_kind <= 2'd0; r_cnt <= 6'd0; r_upd <= 1'b1; r_eos <= 1'b0;
-            wr_prev <= 1'b0; addr_prev <= 7'd0;
+            wr_prev <= 1'b0; hold_prev <= 1'b0; addr_prev <= 7'd0; din_prev <= 8'd0;
             req_pending <= 1'b0; init_pulse <= 1'b0; st_resp <= 1'b0; st_wb <= 1'b0;
             f_wp <= 2'd0; f_rp <= 2'd0; f_cnt <= 3'd0;
         end else begin
-            wr_prev <= wr; addr_prev <= addr;
+            wr_prev <= wr; hold_prev <= hold; addr_prev <= addr; din_prev <= din;
             init_pulse <= 1'b0;
-            if (wr) begin
-                if (addr < 7'h1E) r_cdf[8 * addr +: 8] <= uio_in;
-                if (addr == 7'h1E) begin r_n <= uio_in[3:0]; r_kind <= uio_in[5:4]; end
-                if (addr == 7'h1F) r_cnt <= uio_in[5:0];
+            if (hold) begin
+                if (addr < 7'h1E) r_cdf[8 * addr +: 8] <= din;
+                if (addr == 7'h1E) begin r_n <= din[3:0]; r_kind <= din[5:4]; end
+                if (addr == 7'h1F) r_cnt <= din[5:0];
                 if (addr == 7'h20 && wr_edge) begin
-                    r_upd <= uio_in[1]; r_eos <= uio_in[3];
-                    if (uio_in[0]) begin init_pulse <= 1'b1; f_wp <= 2'd0; f_rp <= 2'd0; f_cnt <= 3'd0; end
-                    if (uio_in[2]) begin req_pending <= 1'b1; st_resp <= 1'b0; st_wb <= 1'b0; end
+                    r_upd <= din[1]; r_eos <= din[3];
+                    if (din[0]) init_pulse <= 1'b1;
+                    if (din[2]) begin req_pending <= 1'b1; st_resp <= 1'b0; st_wb <= 1'b0; end
                 end
             end
             if (req_pending && req_ready) req_pending <= 1'b0;
             if (resp_valid) st_resp <= 1'b1;
             if (resp_wb_valid) st_wb <= 1'b1;
-            // FIFO (an init clears it above; a push and a pop in the same cycle keep the count)
-            if (push) begin fifo[f_wp] <= uio_in; f_wp <= f_wp + 2'd1; end
-            if (pop) f_rp <= f_rp + 2'd1;
-            if (!(push && (addr == 7'h20 && wr_edge && uio_in[0]))) f_cnt <= f_cnt + 3'(push) - 3'(pop);
+            // FIFO: an init empties it (and wins over a pop of the old tile's leftover bytes in the same clock);
+            // otherwise a push and a pop in the same clock keep the count
+            if (do_init) begin
+                f_wp <= 2'd0; f_rp <= 2'd0; f_cnt <= 3'd0;
+            end else begin
+                if (push) begin fifo[f_wp] <= din; f_wp <= f_wp + 2'd1; end
+                if (pop) f_rp <= f_rp + 2'd1;
+                f_cnt <= f_cnt + 3'(push) - 3'(pop);
+            end
         end
     end
 
@@ -118,7 +142,7 @@ module tt_um_jonahss_msac (
     end
     assign uo_out  = status;
     assign uio_out = rd;
-    assign uio_oe  = {8{!wr}};
+    assign uio_oe  = {8{!ui_in[7]}};             // the raw pin: release uio the moment the host raises the strobe
 
     wire _unused = &{ena, 1'b0};
 endmodule
