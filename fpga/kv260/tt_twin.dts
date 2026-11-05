@@ -1,0 +1,27 @@
+/* Device-tree overlay for the tt-msac twin bitstream (xmutil loadapp tt_twin): programs the PL, releases its resets,
+ * pl_clk0 = 100 MHz (the AXI side), pl_clk1 = 50 MHz (the chip's clock). The pins are an AXI GPIO at 0xA000_0000,
+ * driven through /dev/mem by fpga/kv260/twin.py. */
+/dts-v1/;
+/plugin/;
+&fpga_full {
+    firmware-name = "tt_twin.bit.bin";
+    resets = <&zynqmp_reset 116>, <&zynqmp_reset 117>, <&zynqmp_reset 118>, <&zynqmp_reset 119>;
+};
+&amba {
+    clocking0: clocking0 {
+        #clock-cells = <0>;
+        assigned-clock-rates = <99999999>;
+        assigned-clocks = <&zynqmp_clk 71>;
+        clock-output-names = "fabric_clk";
+        clocks = <&zynqmp_clk 71>;
+        compatible = "xlnx,fclk";
+    };
+    clocking1: clocking1 {
+        #clock-cells = <0>;
+        assigned-clock-rates = <50000000>;
+        assigned-clocks = <&zynqmp_clk 72>;
+        clock-output-names = "chip_clk";
+        clocks = <&zynqmp_clk 72>;
+        compatible = "xlnx,fclk";
+    };
+};
