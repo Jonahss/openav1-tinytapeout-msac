@@ -27,10 +27,22 @@ class SimPins:
         self.dut, self.rnd, self.skew = dut, rnd, skew
         self.ui, self.uio, self.drive = 0, 0, False
 
+    @staticmethod
+    def bits(sig, what, need=0xFF):
+        """A signal as an int, X/Z bits as 0; any X/Z bit inside `need` fails (gate level starts unreset flops at X:
+        harmless where the host does not look, a bug where it does)."""
+        s = str(sig.value)
+        v = bad = 0
+        for c in s:
+            v, bad = (v << 1) | (c == "1"), (bad << 1) | (c not in "01")
+        if bad & need:
+            raise AssertionError(f"{what} = {s}: undefined bits where the host reads")
+        return v
+
     def pad(self):
         """uio as the pins see it: the chip's byte where it drives (uio_oe), the host's where it drives, else 0."""
-        oe = int(self.dut.uio_oe.value)
-        out = int(self.dut.uio_out.value)
+        oe = self.bits(self.dut.uio_oe, "uio_oe")
+        out = self.bits(self.dut.uio_out, "uio_out", need=oe)
         host = self.uio if self.drive else 0
         if self.drive and oe:
             raise AssertionError(f"uio contention: host drives {self.uio:#04x} while uio_oe = {oe:#04x}")
@@ -53,7 +65,10 @@ class SimPins:
 
     async def sample(self):
         await ReadOnly()
-        v = (int(self.dut.uo_out.value), self.pad())
+        uo = self.bits(self.dut.uo_out, "uo_out", need=0x0F)          # the handshake bits always
+        if uo & 1:
+            uo = self.bits(self.dut.uo_out, "uo_out", need=0xFF)      # and the symbol once a response is flagged
+        v = (uo, self.pad())
         await Timer(1, "ns")
         return v
 
