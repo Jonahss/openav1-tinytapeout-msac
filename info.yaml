@@ -1,56 +1,58 @@
 # Tiny Tapeout project information
 project:
-  title:        ""      # Project title
-  author:       ""      # Your name
+  title:        "openav1 msac: the AV1 arithmetic decoder"      # Project title
+  author:       "Jonah Stiennon and Claw"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  ""      # One line description of what your project does
-  language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
-  clock_hz:     0       # Clock frequency in Hz (or 0 if not applicable)
+  description:  "The AV1 symbol (arithmetic) decoder core of the openav1 hardware decoder behind a byte-wide register window"      # One line description of what your project does
+  language:     "SystemVerilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
+  clock_hz:     50000000       # Clock frequency in Hz (or 0 if not applicable)
 
   # How many tiles your design occupies? A single tile is about 167x108 uM.
-  tiles: "1x1"          # Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2 or 8x2
+  tiles: "4x2"          # Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2 or 8x2
 
   # Your top module name must start with "tt_um_". Make it unique by including your github username:
-  top_module:  "tt_um_example"
+  top_module:  "tt_um_jonahss_msac"
 
   # List your project's source files here.
   # Source files must be in ./src and you must list each source file separately, one per line.
   # Don't forget to also update `PROJECT_SOURCES` in test/Makefile.
   source_files:
-    - "project.v"
+    - "cdf_map_pkg.sv"
+    - "msac.sv"
+    - "tt_um_jonahss_msac.sv"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
   # Inputs
-  ui[0]: ""
-  ui[1]: ""
-  ui[2]: ""
-  ui[3]: ""
-  ui[4]: ""
-  ui[5]: ""
-  ui[6]: ""
-  ui[7]: ""
+  ui[0]: "addr[0]"
+  ui[1]: "addr[1]"
+  ui[2]: "addr[2]"
+  ui[3]: "addr[3]"
+  ui[4]: "addr[4]"
+  ui[5]: "addr[5]"
+  ui[6]: "addr[6]"
+  ui[7]: "wr strobe"
 
   # Outputs
-  uo[0]: ""
-  uo[1]: ""
-  uo[2]: ""
-  uo[3]: ""
-  uo[4]: ""
-  uo[5]: ""
-  uo[6]: ""
-  uo[7]: ""
+  uo[0]: "resp_valid"
+  uo[1]: "req_ready"
+  uo[2]: "in_ready"
+  uo[3]: "wb_valid"
+  uo[4]: "sym[0]"
+  uo[5]: "sym[1]"
+  uo[6]: "sym[2]"
+  uo[7]: "sym[3]"
 
   # Bidirectional pins
-  uio[0]: ""
-  uio[1]: ""
-  uio[2]: ""
-  uio[3]: ""
-  uio[4]: ""
-  uio[5]: ""
-  uio[6]: ""
-  uio[7]: ""
+  uio[0]: "data[0]"
+  uio[1]: "data[1]"
+  uio[2]: "data[2]"
+  uio[3]: "data[3]"
+  uio[4]: "data[4]"
+  uio[5]: "data[5]"
+  uio[6]: "data[6]"
+  uio[7]: "data[7]"
 
 # Do not change!
 yaml_version: 6

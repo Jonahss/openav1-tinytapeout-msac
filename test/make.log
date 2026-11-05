@@ -1,0 +1,24 @@
+rm -f results.xml
+rm -f results.xml
+COCOTB_TEST_MODULES=test COCOTB_TESTCASE=  COCOTB_TOPLEVEL=tb TOPLEVEL_LANG=verilog       \
+         sim_build/rtl/Vtop  --timing -Wno-fatal -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC   
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:242  in gpi_load_users                  Loaded entry library: '/usr/lib/x86_64-linux-gnu/libpython3.10.so.1.0'
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:233  in gpi_load_users                  Running entry func 'initialize' from loaded library '/home/jonahss/openav1/venv/lib/python3.10/site-packages/cocotb/simulator.cpython-310-x86_64-linux-gnu.so'
+     -.--ns INFO     pygpi                              ..ib/pygpi/embed.cpp:114  in initialize                      Using Python 3.10.19 interpreter at /home/jonahss/openav1/venv/bin/python3
+     -.--ns INFO     gpi                                ../gpi/GpiCommon.cpp:74   in gpi_print_registered_impl       GPI: VPI support registered
+     0.00ns INFO     cocotb.initialize                  Seeding Python random module with 1793854167
+     0.00ns INFO     cocotb.initialize                  Initialized cocotb v2.1.0 from /home/jonahss/openav1/venv/lib/python3.10/site-packages/cocotb
+     0.00ns INFO     cocotb.initialize                  Running on Verilator version 5.053 devel
+     0.00ns INFO     cocotb.regression                  Running tests
+     0.00ns INFO     cocotb.regression                  running test.replay_trace (1/1)
+3166681.00ns INFO     cocotb.tb                          OK: 5346 symbols over the pins
+3166681.00ns INFO     cocotb.regression                  test.replay_trace passed
+3166681.00ns INFO     cocotb.regression                  **************************************************************************************
+                                                        ** TEST                          STATUS  SIM TIME (ns)  REAL TIME (s)  RATIO (ns/s) **
+                                                        **************************************************************************************
+                                                        ** test.replay_trace              PASS     3166681.00           5.69     556495.68  **
+                                                        **************************************************************************************
+                                                        ** TESTS=1 PASS=1 FAIL=0 SKIP=0            3166681.00           5.69     556470.11  **
+                                                        **************************************************************************************
+-Info: /home/jonahss/tt-msac/test/tb.v:12: $dumpvar ignored, as Verilated without --trace
+- :0: Verilog $finish

@@ -2,11 +2,11 @@
 # See https://docs.cocotb.org/en/stable/quickstart.html for more info
 
 # defaults
-SIM ?= icarus
+SIM ?= verilator
 FST ?= -fst # Use more efficient FST format
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
-PROJECT_SOURCES = project.v
+PROJECT_SOURCES = cdf_map_pkg.sv msac.sv tt_um_jonahss_msac.sv
 
 ifneq ($(GATES),yes)
 
