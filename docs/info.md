@@ -55,7 +55,6 @@ synchronised clocks, so a host driving the pins from software (the demo board's 
 | `0x50`..`0x6D` | | adapted CDF row, entry k at `0x50 + 2k` |
 | `0x45`..`0x47` | | symbols decoded (24 bits, from the last snapshot) |
 | `0x48`..`0x4B` | | clocks since the last clear (32 bits, snapshot) |
-| `0x4C`..`0x4F` | | clocks the core was busy with a request (32 bits, snapshot) |
 | `0x70`..`0x73` | | self-test signature (32 bits) |
 | `0x74` | | self-test status: bit 0 running, bit 1 done |
 

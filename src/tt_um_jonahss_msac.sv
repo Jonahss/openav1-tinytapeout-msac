@@ -36,7 +36,6 @@
 // Registers (read):
 //   0x40 status  0x41 symbol  0x42/0x43 range (low, high)  0x44 adapted counter  0x50..0x6D adapted CDF row
 //   0x45..0x47  symbols decoded (24 bits, snapshot)        0x48..0x4B clocks (32 bits, snapshot)
-//   0x4C..0x4F  clocks the core was busy with a request (32 bits, snapshot)
 //   0x70..0x73  self-test signature (32 bits)               0x74 self-test status: bit 0 running, bit 1 done
 //
 // A symbol: write the row (once per row change), n/kind/cnt, then control with bit 2; resp_valid rises in the status
@@ -100,8 +99,9 @@ module tt_um_jonahss_msac (
     // ---- extras: row port, counters, self-test (none of them touches the registers above) ----
     logic [4:0]  row_ptr;
     logic [23:0] c_sym, s_sym;                   // counters and their snapshots
-    logic [31:0] c_clk, s_clk, c_busy, s_busy;
-    logic        busy;                           // a request issued and its write-back not yet seen
+    logic [31:0] c_clk, s_clk;
+    logic        busy;                           // a request issued and its write-back not yet seen (the core takes
+                                                 // two clocks a symbol: busy clocks = 2 x symbols, so no counter)
     logic        bist_run, bist_done, bist_init, bist_req;
     logic [15:0] bist_n, bist_left;
     logic [15:0] lfsr;
@@ -169,7 +169,7 @@ module tt_um_jonahss_msac (
     always_ff @(posedge clk) begin
         if (rst) begin
             row_ptr <= 5'd0;
-            c_sym <= '0; s_sym <= '0; c_clk <= '0; s_clk <= '0; c_busy <= '0; s_busy <= '0; busy <= 1'b0;
+            c_sym <= '0; s_sym <= '0; c_clk <= '0; s_clk <= '0; busy <= 1'b0;
             bist_run <= 1'b0; bist_done <= 1'b0; bist_init <= 1'b0; bist_req <= 1'b0;
             bist_n <= 16'd0; bist_left <= 16'd0; lfsr <= 16'hACE1; sig <= 32'hFFFF_FFFF;
         end else begin
@@ -179,11 +179,10 @@ module tt_um_jonahss_msac (
             // counters
             c_clk <= c_clk + 32'd1;
             if (resp_valid) c_sym <= c_sym + 24'd1;
-            if (busy) c_busy <= c_busy + 32'd1;
             if (core_req && req_ready) busy <= 1'b1;
             else if (resp_wb_valid) busy <= 1'b0;
-            if (wr_edge && addr == 7'h24 && din[1]) begin s_sym <= c_sym; s_clk <= c_clk; s_busy <= c_busy; end
-            if (wr_edge && addr == 7'h24 && din[0]) begin c_sym <= '0; c_clk <= '0; c_busy <= '0; end
+            if (wr_edge && addr == 7'h24 && din[1]) begin s_sym <= c_sym; s_clk <= c_clk; end
+            if (wr_edge && addr == 7'h24 && din[0]) begin c_sym <= '0; c_clk <= '0; end
             // self-test
             if (wr_edge && addr == 7'h26) bist_n[7:0]  <= din;
             if (wr_edge && addr == 7'h27) bist_n[15:8] <= din;
@@ -226,7 +225,6 @@ module tt_um_jonahss_msac (
         else if (addr >= 7'h50 && addr < 7'h6E) rd = resp_cdf[8 * (addr - 7'h50) +: 8];
         else if (addr >= 7'h45 && addr <= 7'h47) rd = s_sym[8 * (addr - 7'h45) +: 8];
         else if (addr >= 7'h48 && addr <= 7'h4B) rd = s_clk[8 * (addr - 7'h48) +: 8];
-        else if (addr >= 7'h4C && addr <= 7'h4F) rd = s_busy[8 * (addr - 7'h4C) +: 8];
         else if (addr >= 7'h70 && addr <= 7'h73) rd = sig[8 * (addr - 7'h70) +: 8];
         else if (addr == 7'h74) rd = {6'd0, bist_done, bist_run};
     end

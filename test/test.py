@@ -122,7 +122,7 @@ async def replay_traces(dut):
 @cocotb.test()
 async def row_port_and_counters(dut):
     """The same golden replay with every CDF row written through the row port (0x22/0x23), then the counters:
-    exactly one symbol per request, clocks = the simulated clocks between clear and snapshot, busy within them."""
+    exactly one symbol per request, clocks = the simulated clocks between clear and snapshot."""
     await reset(dut)
     p, skew = sim_pins(dut)
     path = os.environ.get("MSAC_TRACE") or os.path.join(HERE, "vectors", "argon10001_f5_2tiles.txt")
@@ -138,15 +138,14 @@ async def row_port_and_counters(dut):
     t0 = ticks[0]
     n = await run_async(msac_host.replay_port(path), p)
     t1 = ticks[0]
-    syms, clks, busy = await run_async(msac_host.read_counters(), p)
-    dut._log.info(f"OK: {n} symbols through the row port; counters: {syms} symbols, {clks} clocks, {busy} busy "
+    syms, clks = await run_async(msac_host.read_counters(), p)
+    dut._log.info(f"OK: {n} symbols through the row port; counters: {syms} symbols, {clks} clocks "
                   f"(sim {t1 - t0} clocks)")
     assert syms == n, f"symbol counter {syms} != {n}"
     # clear and snapshot each act a fixed delay after their strobe; the snapshot write comes after t1
     assert t1 - t0 <= clks <= t1 - t0 + 200, f"clock counter {clks} vs sim {t1 - t0}"
-    assert 0 < busy < clks, f"busy {busy} not within (0, {clks})"
     await run_async(msac_host.clear_counters(), p)
-    syms2, clks2, _ = await run_async(msac_host.read_counters(), p)
+    syms2, clks2 = await run_async(msac_host.read_counters(), p)
     assert syms2 == 0 and clks2 < 100, f"after clear: {syms2} symbols, {clks2} clocks"
 
 
@@ -163,9 +162,9 @@ async def self_test_signatures(dut):
         await run_async(msac_host.clear_counters(), p)
         got = await run_async(msac_host.self_test(kind, n, row, cnt, upd, count), p)
         exp = msac_model.bist_signature(kind, n, row, cnt, upd, count)
-        syms, clks, busy = await run_async(msac_host.read_counters(), p)
+        syms, clks = await run_async(msac_host.read_counters(), p)
         dut._log.info(f"self-test {name}: {count} symbols, signature {got:#010x} (model {exp:#010x}), "
-                      f"counter {syms}, {clks} clocks, {busy} busy")
+                      f"counter {syms}, {clks} clocks")
         assert got == exp, f"self-test {name}: signature {got:#010x} != model {exp:#010x}"
         assert syms == count, f"self-test {name}: symbol counter {syms} != {count}"
     path = os.path.join(HERE, "vectors", "argon10001_f5_2tiles.txt")

@@ -222,11 +222,11 @@ def write_row_port(row):
 
 
 def read_counters(snapshot=True):
-    """(symbols, clocks, busy clocks) from the snapshot registers (snapshot first unless told not to)."""
+    """(symbols, clocks) from the snapshot registers (snapshot first unless told not to)."""
     if snapshot:
         yield from write(0x24, 0x02)
     v = []
-    for base, nbytes in ((0x45, 3), (0x48, 4), (0x4C, 4)):
+    for base, nbytes in ((0x45, 3), (0x48, 4)):
         x = 0
         for k in range(nbytes):
             x |= (yield from read(base + k)) << (8 * k)

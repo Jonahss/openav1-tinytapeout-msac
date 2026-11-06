@@ -170,7 +170,7 @@ def main():
             msac_host.run(msac_host.clear_counters(), p)
             got = msac_host.run(msac_host.self_test(kind, n, row, cnt, upd, count), p)
             exp = msac_model.bist_signature(kind, n, row, cnt, upd, count)
-            syms, clks, busy = msac_host.run(msac_host.read_counters(), p)
+            syms, clks = msac_host.run(msac_host.read_counters(), p)
             ok = got == exp and syms == count
             line = f"{'PASS' if ok else 'FAIL'} self-test {name}: {got:#010x} (model {exp:#010x}), {syms} symbols in {clks} clocks"
             print(line, flush=True)
