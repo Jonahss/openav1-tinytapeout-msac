@@ -23,8 +23,21 @@
 //   0x20        control: bit 0 init (pulse), bit 1 cdf_update_en (level), bit 2 request (pulse), bit 3 eos (level:
 //               no more stream bytes after the ones already pushed)
 //   0x21        stream byte push (one byte per strobe edge; in_ready in the status says there is room)
+//   0x22        row pointer: the byte of the CDF row (0..29) the next 0x23 write goes to
+//   0x23        row port: writes one CDF row byte at the row pointer and steps the pointer (once per strobe), so a
+//               host can keep the address at 0x23 and stream the row without an address phase per byte
+//   0x24        counters: bit 0 clear (all counters to 0), bit 1 snapshot (copy the counters to the readable
+//               registers, so a multi-byte read never tears)
+//   0x25        self-test: bit 0 start (once per strobe). Runs the core on N symbols of the current request
+//               registers (row, n, kind, counter, cdf_update_en) against a built-in LFSR byte stream, folding every
+//               response into a 32-bit signature. The core is re-initialised at the start; init it again before
+//               decoding a real tile afterwards.
+//   0x26/0x27   self-test symbol count N (low, high; 0 means 65536)
 // Registers (read):
 //   0x40 status  0x41 symbol  0x42/0x43 range (low, high)  0x44 adapted counter  0x50..0x6D adapted CDF row
+//   0x45..0x47  symbols decoded (24 bits, snapshot)        0x48..0x4B clocks (32 bits, snapshot)
+//   0x4C..0x4F  clocks the core was busy with a request (32 bits, snapshot)
+//   0x70..0x73  self-test signature (32 bits)               0x74 self-test status: bit 0 running, bit 1 done
 //
 // A symbol: write the row (once per row change), n/kind/cnt, then control with bit 2; resp_valid rises in the status
 // one clock after the request is accepted and the symbol is in the top nibble; wb_valid one clock later says the
@@ -83,7 +96,40 @@ module tt_um_jonahss_msac (
     wire f_full  = (f_cnt == 3'd4);
     wire f_empty = (f_cnt == 3'd0);
     wire push = wr_edge && (addr == 7'h21) && !f_full;
-    wire pop  = !f_empty && in_ready;
+
+    // ---- extras: row port, counters, self-test (none of them touches the registers above) ----
+    logic [4:0]  row_ptr;
+    logic [23:0] c_sym, s_sym;                   // counters and their snapshots
+    logic [31:0] c_clk, s_clk, c_busy, s_busy;
+    logic        busy;                           // a request issued and its write-back not yet seen
+    logic        bist_run, bist_done, bist_init, bist_req;
+    logic [15:0] bist_n, bist_left;
+    logic [15:0] lfsr;
+    logic [31:0] sig;
+    // the stream byte of the self-test: the LFSR's low byte; the LFSR steps 8 times per byte consumed
+    // (x^16 + x^14 + x^13 + x^11 + 1, Fibonacci form, shifting left)
+    logic [15:0] lfsr_next;
+    always_comb begin
+        lfsr_next = lfsr;
+        for (int i = 0; i < 8; i++) lfsr_next = {lfsr_next[14:0], lfsr_next[15] ^ lfsr_next[13] ^ lfsr_next[12] ^ lfsr_next[10]};
+    end
+    // the signature word of a response: range, symbol and (adaptive requests only) the adapted counter and the
+    // XOR of the 15 adapted CDF entries; non-adaptive kinds leave the write-back fields alone, so they are masked
+    logic [15:0] cdf_fold;
+    always_comb begin
+        cdf_fold = 16'd0;
+        for (int i = 0; i < 15; i++) cdf_fold = cdf_fold ^ resp_cdf[16 * i +: 16];
+    end
+    wire [31:0] sig_word = (r_kind == 2'd0) ? ({cdf_fold, resp_rng} ^ {22'd0, resp_cnt, resp_sym})
+                                            : ({16'd0, resp_rng} ^ {28'd0, resp_sym});
+
+    // the core's inputs: the host's FIFO and request registers, or the self-test while it runs
+    wire       core_in_valid = bist_run ? 1'b1 : !f_empty;
+    wire [7:0] core_in_data  = bist_run ? lfsr[7:0] : fifo[f_rp];
+    wire       core_in_eos   = bist_run ? 1'b0 : (r_eos && f_empty);
+    wire       core_init     = init_pulse || bist_init;
+    wire       core_req      = bist_run ? bist_req : req_pending;
+    wire pop  = !bist_run && !f_empty && in_ready;
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -98,13 +144,14 @@ module tt_um_jonahss_msac (
                 if (addr < 7'h1E) r_cdf[8 * addr +: 8] <= din;
                 if (addr == 7'h1E) begin r_n <= din[3:0]; r_kind <= din[5:4]; end
                 if (addr == 7'h1F) r_cnt <= din[5:0];
+                if (addr == 7'h23 && wr_edge && row_ptr < 5'd30) r_cdf[8 * row_ptr +: 8] <= din;       // the row port
                 if (addr == 7'h20 && wr_edge) begin
                     r_upd <= din[1]; r_eos <= din[3];
                     if (din[0]) init_pulse <= 1'b1;
                     if (din[2]) begin req_pending <= 1'b1; st_resp <= 1'b0; st_wb <= 1'b0; end
                 end
             end
-            if (req_pending && req_ready) req_pending <= 1'b0;
+            if (req_pending && req_ready && !bist_run) req_pending <= 1'b0;
             if (resp_valid) st_resp <= 1'b1;
             if (resp_wb_valid) st_wb <= 1'b1;
             // FIFO: an init empties it (and wins over a pop of the old tile's leftover bytes in the same clock);
@@ -119,11 +166,49 @@ module tt_um_jonahss_msac (
         end
     end
 
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            row_ptr <= 5'd0;
+            c_sym <= '0; s_sym <= '0; c_clk <= '0; s_clk <= '0; c_busy <= '0; s_busy <= '0; busy <= 1'b0;
+            bist_run <= 1'b0; bist_done <= 1'b0; bist_init <= 1'b0; bist_req <= 1'b0;
+            bist_n <= 16'd0; bist_left <= 16'd0; lfsr <= 16'hACE1; sig <= 32'hFFFF_FFFF;
+        end else begin
+            // row port
+            if (wr_edge && addr == 7'h22) row_ptr <= din[4:0];
+            if (wr_edge && addr == 7'h23) row_ptr <= (row_ptr >= 5'd29) ? 5'd0 : row_ptr + 5'd1;   // the byte: main block
+            // counters
+            c_clk <= c_clk + 32'd1;
+            if (resp_valid) c_sym <= c_sym + 24'd1;
+            if (busy) c_busy <= c_busy + 32'd1;
+            if (core_req && req_ready) busy <= 1'b1;
+            else if (resp_wb_valid) busy <= 1'b0;
+            if (wr_edge && addr == 7'h24 && din[1]) begin s_sym <= c_sym; s_clk <= c_clk; s_busy <= c_busy; end
+            if (wr_edge && addr == 7'h24 && din[0]) begin c_sym <= '0; c_clk <= '0; c_busy <= '0; end
+            // self-test
+            if (wr_edge && addr == 7'h26) bist_n[7:0]  <= din;
+            if (wr_edge && addr == 7'h27) bist_n[15:8] <= din;
+            bist_init <= 1'b0;
+            if (wr_edge && addr == 7'h25 && din[0] && !bist_run) begin
+                bist_run <= 1'b1; bist_done <= 1'b0; bist_init <= 1'b1; bist_req <= 1'b0;
+                bist_left <= bist_n; lfsr <= 16'hACE1; sig <= 32'hFFFF_FFFF;
+            end else if (bist_run) begin
+                if (in_ready) lfsr <= lfsr_next;
+                if (!bist_init && !bist_req && !busy && req_ready) bist_req <= 1'b1;      // issue the next request
+                if (bist_req && req_ready) bist_req <= 1'b0;
+                if (resp_wb_valid) begin
+                    sig <= {sig[30:0], sig[31] ^ sig[21] ^ sig[1] ^ sig[0]} ^ sig_word;
+                    bist_left <= bist_left - 16'd1;
+                    if (bist_left == 16'd1) begin bist_run <= 1'b0; bist_done <= 1'b1; end
+                end
+            end
+        end
+    end
+
     msac u_core (
         .clk(clk), .rst(rst),
-        .in_data(fifo[f_rp]), .in_valid(!f_empty), .in_ready(in_ready), .in_eos(r_eos && f_empty),
-        .init(init_pulse), .cdf_update_en(r_upd),
-        .req_valid(req_pending), .req_ready(req_ready), .req_kind(r_kind), .req_n(r_n), .req_cdf(r_cdf), .req_cnt(r_cnt),
+        .in_data(core_in_data), .in_valid(core_in_valid), .in_ready(in_ready), .in_eos(core_in_eos),
+        .init(core_init), .cdf_update_en(r_upd),
+        .req_valid(core_req), .req_ready(req_ready), .req_kind(r_kind), .req_n(r_n), .req_cdf(r_cdf), .req_cnt(r_cnt),
         .resp_valid(resp_valid), .resp_sym(resp_sym), .resp_wb_valid(resp_wb_valid), .resp_rng(resp_rng),
         .resp_cdf(resp_cdf), .resp_cnt(resp_cnt)
     );
@@ -139,6 +224,11 @@ module tt_um_jonahss_msac (
         else if (addr == 7'h43) rd = resp_rng[15:8];
         else if (addr == 7'h44) rd = {2'd0, resp_cnt};
         else if (addr >= 7'h50 && addr < 7'h6E) rd = resp_cdf[8 * (addr - 7'h50) +: 8];
+        else if (addr >= 7'h45 && addr <= 7'h47) rd = s_sym[8 * (addr - 7'h45) +: 8];
+        else if (addr >= 7'h48 && addr <= 7'h4B) rd = s_clk[8 * (addr - 7'h48) +: 8];
+        else if (addr >= 7'h4C && addr <= 7'h4F) rd = s_busy[8 * (addr - 7'h4C) +: 8];
+        else if (addr >= 7'h70 && addr <= 7'h73) rd = sig[8 * (addr - 7'h70) +: 8];
+        else if (addr == 7'h74) rd = {6'd0, bist_done, bist_run};
     end
     assign uo_out  = status;
     assign uio_out = rd;

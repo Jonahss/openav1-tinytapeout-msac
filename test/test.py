@@ -18,6 +18,7 @@ from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, ReadOnly, RisingEdge, Timer
 
 import msac_host
+import msac_model
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -87,12 +88,7 @@ async def run_async(gen, b):
         return e.value
 
 
-@cocotb.test()
-async def replay_traces(dut):
-    paths = [os.environ["MSAC_TRACE"]] if os.environ.get("MSAC_TRACE") else sorted(glob.glob(os.path.join(HERE, "vectors", "*.txt")))
-    max_syms = int(os.environ.get("MSAC_MAX_SYMS", "0")) or None
-    skew = os.environ.get("MSAC_SKEW", "1") != "0"
-    rnd = random.Random(int(os.environ.get("MSAC_SEED", "1")))
+async def reset(dut):
     cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
     dut.ena.value = 1
     dut.ui_in.value = 0
@@ -101,9 +97,86 @@ async def replay_traces(dut):
     await ClockCycles(dut.clk, 5)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 2)
+
+
+def sim_pins(dut):
+    skew = os.environ.get("MSAC_SKEW", "1") != "0"
+    return SimPins(dut, random.Random(int(os.environ.get("MSAC_SEED", "1"))), skew), skew
+
+
+@cocotb.test()
+async def replay_traces(dut):
+    paths = [os.environ["MSAC_TRACE"]] if os.environ.get("MSAC_TRACE") else sorted(glob.glob(os.path.join(HERE, "vectors", "*.txt")))
+    max_syms = int(os.environ.get("MSAC_MAX_SYMS", "0")) or None
+    skew = os.environ.get("MSAC_SKEW", "1") != "0"
+    rnd = random.Random(int(os.environ.get("MSAC_SEED", "1")))
+    await reset(dut)
     total = 0
     for path in paths:
         n = await run_async(msac_host.replay(path, max_syms), SimPins(dut, rnd, skew))
         dut._log.info(f"OK: {n} symbols over the pins ({os.path.basename(path)}, skew {skew})")
         total += n
     dut._log.info(f"OK: {total} symbols over the pins in {len(paths)} trace(s)")
+
+
+@cocotb.test()
+async def row_port_and_counters(dut):
+    """The same golden replay with every CDF row written through the row port (0x22/0x23), then the counters:
+    exactly one symbol per request, clocks = the simulated clocks between clear and snapshot, busy within them."""
+    await reset(dut)
+    p, skew = sim_pins(dut)
+    path = os.environ.get("MSAC_TRACE") or os.path.join(HERE, "vectors", "argon10001_f5_2tiles.txt")
+    ticks = [0]
+
+    async def count_clocks():
+        while True:
+            await RisingEdge(dut.clk)
+            ticks[0] += 1
+
+    cocotb.start_soon(count_clocks())
+    await run_async(msac_host.clear_counters(), p)
+    t0 = ticks[0]
+    n = await run_async(msac_host.replay_port(path), p)
+    t1 = ticks[0]
+    syms, clks, busy = await run_async(msac_host.read_counters(), p)
+    dut._log.info(f"OK: {n} symbols through the row port; counters: {syms} symbols, {clks} clocks, {busy} busy "
+                  f"(sim {t1 - t0} clocks)")
+    assert syms == n, f"symbol counter {syms} != {n}"
+    # clear and snapshot each act a fixed delay after their strobe; the snapshot write comes after t1
+    assert t1 - t0 <= clks <= t1 - t0 + 200, f"clock counter {clks} vs sim {t1 - t0}"
+    assert 0 < busy < clks, f"busy {busy} not within (0, {clks})"
+    await run_async(msac_host.clear_counters(), p)
+    syms2, clks2, _ = await run_async(msac_host.read_counters(), p)
+    assert syms2 == 0 and clks2 < 100, f"after clear: {syms2} symbols, {clks2} clocks"
+
+
+BIST_CASES = [
+    # (name, kind, n, row15 (inverted entries), cnt, cdf_update_en, count)
+    ("adaptive n=15", msac_model.KIND_ADAPT, 15,
+     [32768 - (k + 1) * 2048 + 64 * k for k in range(15)], 5, 1, 3000),
+    ("adaptive n=3 counter 31", msac_model.KIND_ADAPT, 3, [24000, 15000, 6000] + [0] * 12, 31, 1, 2000),
+    ("adaptive n=1, updates off", msac_model.KIND_ADAPT, 1, [12000] + [0] * 14, 0, 0, 2000),
+    ("bool f=20000", msac_model.KIND_BOOL, 1, [20000] + [0] * 14, 0, 1, 2000),
+    ("equiprobable", msac_model.KIND_EQUI, 1, [0] * 15, 0, 1, 2000),
+]
+
+
+@cocotb.test()
+async def self_test_signatures(dut):
+    """The self-test against the Python model (msac_model.py, itself checked against the dav1d traces): several
+    request shapes, each signature must match; the symbol counter must count the self-test's symbols; and a host
+    replay must still work after a self-test (init again)."""
+    await reset(dut)
+    p, skew = sim_pins(dut)
+    for name, kind, n, row, cnt, upd, count in BIST_CASES:
+        await run_async(msac_host.clear_counters(), p)
+        got = await run_async(msac_host.self_test(kind, n, row, cnt, upd, count), p)
+        exp = msac_model.bist_signature(kind, n, row, cnt, upd, count)
+        syms, clks, busy = await run_async(msac_host.read_counters(), p)
+        dut._log.info(f"self-test {name}: {count} symbols, signature {got:#010x} (model {exp:#010x}), "
+                      f"counter {syms}, {clks} clocks, {busy} busy")
+        assert got == exp, f"self-test {name}: signature {got:#010x} != model {exp:#010x}"
+        assert syms == count, f"self-test {name}: symbol counter {syms} != {count}"
+    path = os.path.join(HERE, "vectors", "argon10001_f5_2tiles.txt")
+    n = await run_async(msac_host.replay(path), p)
+    dut._log.info(f"OK: {n} symbols replayed after the self-tests")

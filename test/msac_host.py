@@ -109,7 +109,7 @@ class Mismatch(AssertionError):
     pass
 
 
-def replay(path, max_syms=None, progress=None, poll_limit=2000):
+def replay(path, max_syms=None, progress=None, poll_limit=2000, row_writer=None):
     """The golden-trace replay: every symbol, range, adapted row and counter checked. Returns the symbol count.
     progress(done, tile) is called once per 256 symbols and at every tile start."""
     yield ("pins", 0, 0, False)
@@ -136,9 +136,12 @@ def replay(path, max_syms=None, progress=None, poll_limit=2000):
         last_cdf = None
         for ri, (kind, n, cdf, cnt, exp_sym, exp_rng, post, postcnt) in enumerate(reqs):
             if cdf != last_cdf:
-                for k, c in enumerate(cdf):
-                    yield from write(2 * k, c & 0xFF)
-                    yield from write(2 * k + 1, (c >> 8) & 0xFF)
+                if row_writer:
+                    yield from row_writer(cdf)
+                else:
+                    for k, c in enumerate(cdf):
+                        yield from write(2 * k, c & 0xFF)
+                        yield from write(2 * k + 1, (c >> 8) & 0xFF)
                 last_cdf = cdf                               # the chip keeps the written row, not the adapted one
             yield from write(0x1E, (kind << 4) | n)
             yield from write(0x1F, cnt)
@@ -196,3 +199,69 @@ def run(gen, backend):
                 op = gen.send(backend.sample())
     except StopIteration as e:
         return e.value
+
+
+# ---------------------------------------------------------------- the extras: row port, counters, self-test
+
+def write_port(value):
+    """One byte into the row port (0x23) with the address already on the pins: strobe + data, release."""
+    yield ("pins", 0x80 | 0x23, value & 0xFF, True)
+    yield ("wait", HOLD)
+    yield ("pins", 0x23, 0, False)
+    yield ("wait", HOLD)
+
+
+def write_row_port(row):
+    """A whole CDF row through the row port: pointer to 0, then the bytes without an address phase each."""
+    yield from write(0x22, 0)
+    yield ("pins", 0x23, 0, False)
+    yield ("wait", HOLD)
+    for c in row:
+        yield from write_port(c & 0xFF)
+        yield from write_port((c >> 8) & 0xFF)
+
+
+def read_counters(snapshot=True):
+    """(symbols, clocks, busy clocks) from the snapshot registers (snapshot first unless told not to)."""
+    if snapshot:
+        yield from write(0x24, 0x02)
+    v = []
+    for base, nbytes in ((0x45, 3), (0x48, 4), (0x4C, 4)):
+        x = 0
+        for k in range(nbytes):
+            x |= (yield from read(base + k)) << (8 * k)
+        v.append(x)
+    return tuple(v)
+
+
+def clear_counters():
+    yield from write(0x24, 0x01)
+
+
+def self_test(kind, n, row15, cnt, upd, count, poll_limit=10_000_000):
+    """Load the request registers, run the self-test for `count` symbols, return the 32-bit signature."""
+    for k, c in enumerate(row15):
+        yield from write(2 * k, c & 0xFF)
+        yield from write(2 * k + 1, (c >> 8) & 0xFF)
+    yield from write(0x1E, (kind << 4) | n)
+    yield from write(0x1F, cnt)
+    yield from write(0x20, 0x02 if upd else 0x00)          # cdf_update_en (no init, no request)
+    yield from write(0x26, count & 0xFF)
+    yield from write(0x27, (count >> 8) & 0xFF)
+    yield from write(0x25, 0x01)
+    for _ in range(poll_limit):
+        st = yield from read(0x74)
+        if st & 2:
+            break
+        yield ("wait", 64)
+    else:
+        raise Mismatch("self-test never finished")
+    sig = 0
+    for k in range(4):
+        sig |= (yield from read(0x70 + k)) << (8 * k)
+    return sig
+
+
+def replay_port(path, max_syms=None):
+    """replay() with every CDF row written through the row port: the same checks."""
+    return replay(path, max_syms, row_writer=write_row_port)
