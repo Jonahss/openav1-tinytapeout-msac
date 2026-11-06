@@ -150,6 +150,18 @@ def bist_signature(kind, n, row15, cnt, upd, count):
     return sig
 
 
+# the self-test cases the cocotb test and the KV260 twin both run
+BIST_CASES = [
+    # (name, kind, n, row15 (inverted entries), cnt, cdf_update_en, count)
+    ("adaptive n=15", KIND_ADAPT, 15,
+     [32768 - (k + 1) * 2048 + 64 * k for k in range(15)], 5, 1, 3000),
+    ("adaptive n=3 counter 31", KIND_ADAPT, 3, [24000, 15000, 6000] + [0] * 12, 31, 1, 2000),
+    ("adaptive n=1, updates off", KIND_ADAPT, 1, [12000] + [0] * 14, 0, 0, 2000),
+    ("bool f=20000", KIND_BOOL, 1, [20000] + [0] * 14, 0, 1, 2000),
+    ("equiprobable", KIND_EQUI, 1, [0] * 15, 0, 1, 2000),
+]
+
+
 if __name__ == "__main__":
     total = 0
     for p in sys.argv[1:]:

@@ -43,11 +43,21 @@ synchronised clocks, so a host driving the pins from software (the demo board's 
 | `0x1F` | `[5:0]` adaptation counter (0..32) | |
 | `0x20` | control: bit 0 init (once per strobe; empties the FIFO), bit 1 CDF update enable (level), bit 2 request (once per strobe), bit 3 end of stream (level: no bytes beyond those pushed) | |
 | `0x21` | stream byte (one per strobe; check `in_ready` first) | |
+| `0x22` | row pointer: the row byte (0..29) the next `0x23` write goes to | |
+| `0x23` | row port: one CDF row byte at the row pointer, then the pointer steps (once per strobe) | |
+| `0x24` | counters: bit 0 clear, bit 1 snapshot (copy to the readable registers) | |
+| `0x25` | self-test: bit 0 start (once per strobe) | |
+| `0x26` / `0x27` | self-test symbol count N, low / high byte (0 = 65536) | |
 | `0x40` | | status (= `uo`) |
 | `0x41` | | symbol |
 | `0x42` / `0x43` | | range, low / high byte |
 | `0x44` | | adapted counter |
 | `0x50`..`0x6D` | | adapted CDF row, entry k at `0x50 + 2k` |
+| `0x45`..`0x47` | | symbols decoded (24 bits, from the last snapshot) |
+| `0x48`..`0x4B` | | clocks since the last clear (32 bits, snapshot) |
+| `0x4C`..`0x4F` | | clocks the core was busy with a request (32 bits, snapshot) |
+| `0x70`..`0x73` | | self-test signature (32 bits) |
+| `0x74` | | self-test status: bit 0 running, bit 1 done |
 
 ### Pin timing (host side)
 
@@ -56,6 +66,23 @@ synchronised clocks, so a host driving the pins from software (the demo board's 
   wait at least 4 clocks.
 - read: put the address with the strobe low, wait at least 4 clocks, read `uio`.
 - the chip drives `uio` whenever the strobe is low (`uio_oe` follows the strobe pin directly).
+
+### Self-test, counters and the row port
+
+The self-test proves the core without any host traffic beyond a few register writes: load a request into the
+request registers (row, `0x1E`, `0x1F`, and `0x20` bit 1 for CDF update), write N to `0x26`/`0x27`, write `0x25` = 1,
+poll `0x74` until bit 1, read the signature from `0x70`..`0x73`. The core is re-initialised at the start and decodes
+N symbols of that same request against a built-in 16-bit LFSR byte stream (seed `0xACE1`, taps 16/14/13/11, 8 steps
+per byte), folding each response (range, symbol, and for adaptive requests the counter and the XOR of the 15
+adapted entries) into a 32-bit signature (seed `0xFFFFFFFF`, shift left with feedback from bits 31/21/1/0, XOR the
+word). `test/msac_model.py` computes the expected signature from the AV1 specification. Write `0x20` with bit 0
+(init) before decoding a real tile afterwards.
+
+The counters measure the silicon: clear (`0x24` = 1), work, snapshot (`0x24` = 2), read. The core is busy two
+clocks per symbol; the self-test runs at about 4.2 clocks per symbol.
+
+The row port saves the address phase per byte when a CDF row changes: write the pointer `0x22` = 0, put address
+`0x23` on the pins once, then strobe the 30 row bytes.
 
 ## How to test
 
@@ -70,7 +97,8 @@ A tile of AV1, symbol by symbol:
 
 `test/msac_host.py` is that host as a generator of pin operations; `test/test.py` (cocotb) runs it against the RTL
 and the gate-level netlist over four dav1d golden traces (40,360 symbols: 8-bit 4:4:4, 10-bit, multi-tile frames,
-`disable_cdf_update`), checking every symbol, range, adapted row and counter. `fpga/kv260/twin.py` runs the same
+`disable_cdf_update`), checking every symbol, range, adapted row and counter; then the row port and the counters on
+a trace, and the self-test signature of five request shapes against the model. `fpga/kv260/twin.py` runs the same
 code against this exact design on a Kria KV260 (the chip behind its 24 pins on an AXI GPIO, on its own clock).
 
 Clock: up to ~35 MHz is safe across corners (timing closes at 50 MHz in the typical corner).

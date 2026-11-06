@@ -19,6 +19,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "test"))
 import msac_host  # noqa: E402
+import msac_model  # noqa: E402
 
 BASE = 0xA0000000
 GPIO_DATA, GPIO2_DATA = 0x0, 0x8
@@ -125,6 +126,7 @@ def main():
     ap.add_argument("traces", nargs="*")
     ap.add_argument("--max-syms", type=int, default=0)
     ap.add_argument("--show", action="store_true", help="progress and verdict on the panel")
+    ap.add_argument("--self-test", action="store_true", help="also run the on-chip self-test cases against the model")
     a = ap.parse_args()
     paths = a.traces or sorted(glob.glob(os.path.join(HERE, "..", "..", "test", "vectors", "*.txt")))
     p = TwinPins()
@@ -162,6 +164,20 @@ def main():
         print(f"PASS {name}: {n} symbols", flush=True)
     dt = time.time() - t0
     print(f"PASS: {total} symbols over the pins in {len(paths)} trace(s), {dt:.1f} s")
+    if a.self_test:
+        msac_host.run(msac_host.write(0x20, 0x01), p)
+        for name, kind, n, row, cnt, upd, count in msac_model.BIST_CASES:
+            msac_host.run(msac_host.clear_counters(), p)
+            got = msac_host.run(msac_host.self_test(kind, n, row, cnt, upd, count), p)
+            exp = msac_model.bist_signature(kind, n, row, cnt, upd, count)
+            syms, clks, busy = msac_host.run(msac_host.read_counters(), p)
+            ok = got == exp and syms == count
+            line = f"{'PASS' if ok else 'FAIL'} self-test {name}: {got:#010x} (model {exp:#010x}), {syms} symbols in {clks} clocks"
+            print(line, flush=True)
+            log.append(line[:60])
+            if not ok:
+                panel.draw([f"FAIL  self-test {name}"] + log, colour=(255, 90, 90))
+                return 1
     panel.draw([f"PASS  {total} symbols", f"{len(paths)} traces, {dt:.0f} s, every symbol, range and CDF row"] + log,
                colour=(120, 255, 140))
     return 0

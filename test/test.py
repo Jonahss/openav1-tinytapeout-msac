@@ -150,15 +150,6 @@ async def row_port_and_counters(dut):
     assert syms2 == 0 and clks2 < 100, f"after clear: {syms2} symbols, {clks2} clocks"
 
 
-BIST_CASES = [
-    # (name, kind, n, row15 (inverted entries), cnt, cdf_update_en, count)
-    ("adaptive n=15", msac_model.KIND_ADAPT, 15,
-     [32768 - (k + 1) * 2048 + 64 * k for k in range(15)], 5, 1, 3000),
-    ("adaptive n=3 counter 31", msac_model.KIND_ADAPT, 3, [24000, 15000, 6000] + [0] * 12, 31, 1, 2000),
-    ("adaptive n=1, updates off", msac_model.KIND_ADAPT, 1, [12000] + [0] * 14, 0, 0, 2000),
-    ("bool f=20000", msac_model.KIND_BOOL, 1, [20000] + [0] * 14, 0, 1, 2000),
-    ("equiprobable", msac_model.KIND_EQUI, 1, [0] * 15, 0, 1, 2000),
-]
 
 
 @cocotb.test()
@@ -168,7 +159,7 @@ async def self_test_signatures(dut):
     replay must still work after a self-test (init again)."""
     await reset(dut)
     p, skew = sim_pins(dut)
-    for name, kind, n, row, cnt, upd, count in BIST_CASES:
+    for name, kind, n, row, cnt, upd, count in msac_model.BIST_CASES:
         await run_async(msac_host.clear_counters(), p)
         got = await run_async(msac_host.self_test(kind, n, row, cnt, upd, count), p)
         exp = msac_model.bist_signature(kind, n, row, cnt, upd, count)
