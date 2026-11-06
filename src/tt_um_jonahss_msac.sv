@@ -98,6 +98,10 @@ module tt_um_jonahss_msac (
 
     // ---- extras: row port, counters, self-test (none of them touches the registers above) ----
     logic [4:0]  row_ptr;
+    // the extras' write strobes, registered: one clock after wr_edge, so the address decode never sits in front of
+    // a counter, the signature or the row port (the slow corner put addr -> sig on the critical path otherwise)
+    logic        x_ptr, x_port, x_snap, x_clr, x_nlo, x_nhi, x_start;
+    logic [7:0]  x_din;
     logic [23:0] c_sym, s_sym;                   // counters and their snapshots
     logic [31:0] c_clk, s_clk;
     logic        busy;                           // a request issued and its write-back not yet seen (the core takes
@@ -144,13 +148,13 @@ module tt_um_jonahss_msac (
                 if (addr < 7'h1E) r_cdf[8 * addr +: 8] <= din;
                 if (addr == 7'h1E) begin r_n <= din[3:0]; r_kind <= din[5:4]; end
                 if (addr == 7'h1F) r_cnt <= din[5:0];
-                if (addr == 7'h23 && wr_edge && row_ptr < 5'd30) r_cdf[8 * row_ptr +: 8] <= din;       // the row port
                 if (addr == 7'h20 && wr_edge) begin
                     r_upd <= din[1]; r_eos <= din[3];
                     if (din[0]) init_pulse <= 1'b1;
                     if (din[2]) begin req_pending <= 1'b1; st_resp <= 1'b0; st_wb <= 1'b0; end
                 end
             end
+            if (x_port && row_ptr < 5'd30) r_cdf[8 * row_ptr +: 8] <= x_din;                       // the row port
             if (req_pending && req_ready && !bist_run) req_pending <= 1'b0;
             if (resp_valid) st_resp <= 1'b1;
             if (resp_wb_valid) st_wb <= 1'b1;
@@ -169,25 +173,35 @@ module tt_um_jonahss_msac (
     always_ff @(posedge clk) begin
         if (rst) begin
             row_ptr <= 5'd0;
+            x_ptr <= 1'b0; x_port <= 1'b0; x_snap <= 1'b0; x_clr <= 1'b0; x_nlo <= 1'b0; x_nhi <= 1'b0; x_start <= 1'b0;
+            x_din <= 8'd0;
             c_sym <= '0; s_sym <= '0; c_clk <= '0; s_clk <= '0; busy <= 1'b0;
             bist_run <= 1'b0; bist_done <= 1'b0; bist_init <= 1'b0; bist_req <= 1'b0;
             bist_n <= 16'd0; bist_left <= 16'd0; lfsr <= 16'hACE1; sig <= 32'hFFFF_FFFF;
         end else begin
             // row port
-            if (wr_edge && addr == 7'h22) row_ptr <= din[4:0];
-            if (wr_edge && addr == 7'h23) row_ptr <= (row_ptr >= 5'd29) ? 5'd0 : row_ptr + 5'd1;   // the byte: main block
+            x_din   <= din;
+            x_ptr   <= wr_edge && addr == 7'h22;
+            x_port  <= wr_edge && addr == 7'h23;
+            x_snap  <= wr_edge && addr == 7'h24 && din[1];
+            x_clr   <= wr_edge && addr == 7'h24 && din[0];
+            x_nlo   <= wr_edge && addr == 7'h26;
+            x_nhi   <= wr_edge && addr == 7'h27;
+            x_start <= wr_edge && addr == 7'h25 && din[0];
+            if (x_ptr) row_ptr <= x_din[4:0];
+            if (x_port) row_ptr <= (row_ptr >= 5'd29) ? 5'd0 : row_ptr + 5'd1;     // the byte: main block
             // counters
             c_clk <= c_clk + 32'd1;
             if (resp_valid) c_sym <= c_sym + 24'd1;
             if (core_req && req_ready) busy <= 1'b1;
             else if (resp_wb_valid) busy <= 1'b0;
-            if (wr_edge && addr == 7'h24 && din[1]) begin s_sym <= c_sym; s_clk <= c_clk; end
-            if (wr_edge && addr == 7'h24 && din[0]) begin c_sym <= '0; c_clk <= '0; end
+            if (x_snap) begin s_sym <= c_sym; s_clk <= c_clk; end
+            if (x_clr) begin c_sym <= '0; c_clk <= '0; end
             // self-test
-            if (wr_edge && addr == 7'h26) bist_n[7:0]  <= din;
-            if (wr_edge && addr == 7'h27) bist_n[15:8] <= din;
+            if (x_nlo) bist_n[7:0]  <= x_din;
+            if (x_nhi) bist_n[15:8] <= x_din;
             bist_init <= 1'b0;
-            if (wr_edge && addr == 7'h25 && din[0] && !bist_run) begin
+            if (x_start && !bist_run) begin
                 bist_run <= 1'b1; bist_done <= 1'b0; bist_init <= 1'b1; bist_req <= 1'b0;
                 bist_left <= bist_n; lfsr <= 16'hACE1; sig <= 32'hFFFF_FFFF;
             end else if (bist_run) begin
