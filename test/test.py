@@ -184,3 +184,30 @@ async def self_test_after_init(dut):
     exp = msac_model.bist_signature(kind, n, row, cnt, upd, count)
     dut._log.info(f"self-test after init {name}: signature {got:#010x} (model {exp:#010x}, hardware showed 0x458aa45c)")
     assert got == exp, f"self-test after init: {got:#010x} != model {exp:#010x}"
+
+
+@cocotb.test()
+async def request_before_init_parks(dut):
+    """Soak-found 2026-11-08 (U200 twin, random host sequences): a request issued while the core is not ready (before
+    the first init after reset, or after an init while the stream FIFO is still empty and eos is clear) parks in the
+    wrapper and is served as soon as the core is ready, which can be after a later init or self-test, on that new
+    data. The datasheet says init first, requests one at a time, after the first bytes or with eos. This pins the
+    behaviour: a following self-test's signature is untouched and the symbol counter shows the extra response."""
+    await reset(dut)
+    p, skew = sim_pins(dut)
+    await run_async(msac_host.write(0x20, 0x0E), p)                    # request + eos + updates: no init, no bytes
+    s = await run_async(msac_host.status(), p)
+    assert s & 0x02 == 0, f"req_ready set with a request parked: status {s:#04x}"
+    await run_async(msac_host.clear_counters(), p)
+    name, kind, n, row, cnt, upd, count = msac_model.BIST_CASES[2]
+    got = await run_async(msac_host.self_test(kind, n, row, cnt, upd, count), p)
+    exp = msac_model.bist_signature(kind, n, row, cnt, upd, count)
+    syms, clks = await run_async(msac_host.read_counters(), p)
+    dut._log.info(f"request before init, then self-test {name}: signature {got:#010x} (model {exp:#010x}), "
+                  f"counter {syms} = {count} + the parked request")
+    assert got == exp, f"signature {got:#010x} != model {exp:#010x}"
+    assert syms == count + 1, f"symbol counter {syms}: expected {count} + 1 (the parked request, served after the self-test)"
+    s = await run_async(msac_host.status(), p)
+    assert s & 0x03 == 0x03, f"after the parked request: status {s:#04x} (resp_valid and req_ready expected)"
+    n_syms = await run_async(msac_host.replay(os.path.join(HERE, "vectors", "argon10001_f5_2tiles.txt"), 50), p)
+    dut._log.info(f"OK: {n_syms} symbols replayed after that (the replay inits first)")

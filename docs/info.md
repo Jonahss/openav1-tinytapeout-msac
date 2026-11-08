@@ -94,6 +94,12 @@ A tile of AV1, symbol by symbol:
    (keep bits 1 and 3 as they are). Keep pushing stream bytes while waiting; when `resp_valid` rises the symbol is on
    `uo[7:4]`; after `wb_valid`, read the range and, for adaptive symbols, the adapted row and counter.
 
+A request is served when the core is ready. One issued before init, or after an init while the stream FIFO is still
+empty and end of stream is clear, waits in the wrapper and is served as soon as the core has its first 15 bits, which
+can be after a later init or self-test, on that new data (found with random host sequences on the FPGA twin,
+2026-11-08; `test/test.py` pins it). So: init, then bytes (or end of stream), then requests, one at a time; a pin
+reset drops a waiting request.
+
 `test/msac_host.py` is that host as a generator of pin operations; `test/test.py` (cocotb) runs it against the RTL
 and the gate-level netlist over four dav1d golden traces (40,360 symbols: 8-bit 4:4:4, 10-bit, multi-tile frames,
 `disable_cdf_update`), checking every symbol, range, adapted row and counter; then the row port and the counters on
