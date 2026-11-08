@@ -205,7 +205,11 @@ module tt_um_jonahss_msac (
                 bist_run <= 1'b1; bist_done <= 1'b0; bist_init <= 1'b1; bist_req <= 1'b0;
                 bist_left <= bist_n; lfsr <= 16'hACE1; sig <= 32'hFFFF_FFFF;
             end else if (bist_run) begin
-                if (in_ready) lfsr <= lfsr_next;
+                // step only when the core takes the byte: in the init cycle (bist_init -> core_init) the core's init branch
+                // discards its intake while in_ready may already be high (a core left hungry by a host init, register 0x20,
+                // with an empty FIFO), and the stream would start at byte 1. Found on the U200 twin 2026-11-07: the first
+                // self-test after such an init gave 0x458aa45c (model 0xf0a65c39); reproduced in test.py self_test_after_init.
+                if (in_ready && !bist_init) lfsr <= lfsr_next;
                 if (!bist_init && !bist_req && !busy && req_ready) bist_req <= 1'b1;      // issue the next request
                 if (bist_req && req_ready) bist_req <= 1'b0;
                 if (resp_wb_valid) begin

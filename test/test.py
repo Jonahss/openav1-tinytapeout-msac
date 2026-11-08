@@ -170,3 +170,17 @@ async def self_test_signatures(dut):
     path = os.path.join(HERE, "vectors", "argon10001_f5_2tiles.txt")
     n = await run_async(msac_host.replay(path), p)
     dut._log.info(f"OK: {n} symbols replayed after the self-tests")
+
+
+@cocotb.test()
+async def self_test_after_init(dut):
+    """Hardware-found 2026-11-07 (U200 twin): a host init (register 0x20) right before the first self-test makes that
+    self-test's signature wrong; the self-test's own init then discards a byte the LFSR had already stepped past."""
+    await reset(dut)
+    p, skew = sim_pins(dut)
+    await run_async(msac_host.write(0x20, 0x01), p)
+    name, kind, n, row, cnt, upd, count = msac_model.BIST_CASES[0]
+    got = await run_async(msac_host.self_test(kind, n, row, cnt, upd, count), p)
+    exp = msac_model.bist_signature(kind, n, row, cnt, upd, count)
+    dut._log.info(f"self-test after init {name}: signature {got:#010x} (model {exp:#010x}, hardware showed 0x458aa45c)")
+    assert got == exp, f"self-test after init: {got:#010x} != model {exp:#010x}"
