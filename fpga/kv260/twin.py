@@ -27,8 +27,10 @@ RST_N, ENA, CLR = 1 << 17, 1 << 18, 1 << 19
 
 
 class TwinPins:
-    def __init__(self, base=BASE):
-        fd = os.open("/dev/mem", os.O_RDWR | os.O_SYNC)
+    def __init__(self, base=BASE, dev="/dev/mem"):
+        # KV260: /dev/mem at the GPIO's physical address; U200 (openav1 fpga/u200 with U200_TWIN=1): /dev/xdma0_user at 0
+        self.base = base
+        fd = os.open(dev, os.O_RDWR | os.O_SYNC)
         self.mm = mmap.mmap(fd, 0x10000, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE, offset=base)
         os.close(fd)
         addr = ctypes.addressof(ctypes.c_char.from_buffer(self.mm))
@@ -42,7 +44,7 @@ class TwinPins:
     def check_bitstream(self):
         v = self.raw()
         if v >> 28 != 0xA:
-            raise SystemExit(f"no tt twin at {BASE:#x}: read {v:#010x} (load it: sudo fpga/kv260/load.sh <fw dir>)")
+            raise SystemExit(f"no tt twin at {self.base:#x}: read {v:#010x} (KV260: sudo fpga/kv260/load.sh <fw dir>; U200: program the twin image)")
         b0 = (v >> 25) & 7
         t0 = time.time()
         while (self.raw() >> 25) & 7 == b0:               # the heartbeat: bit 23 of a 50 MHz counter, ~6 Hz
@@ -127,13 +129,15 @@ def main():
     ap.add_argument("--max-syms", type=int, default=0)
     ap.add_argument("--show", action="store_true", help="progress and verdict on the panel")
     ap.add_argument("--self-test", action="store_true", help="also run the on-chip self-test cases against the model")
+    ap.add_argument("--dev", default="/dev/mem", help="register device: /dev/mem (KV260) or /dev/xdma0_user (U200)")
+    ap.add_argument("--base", type=lambda x: int(x, 0), default=BASE, help="GPIO offset in that device (KV260 0xA0000000, U200 0)")
     a = ap.parse_args()
     paths = a.traces or sorted(glob.glob(os.path.join(HERE, "..", "..", "test", "vectors", "*.txt")))
-    p = TwinPins()
+    p = TwinPins(a.base, a.dev)
     v = p.check_bitstream()
     p.reset()
     s = p.sample()
-    print(f"twin at {BASE:#x}: {v:#010x}, chip clock running, after reset uo_out {s[0]:#04x} uio {s[1]:#04x}")
+    print(f"twin at {a.dev} + {a.base:#x}: {v:#010x}, chip clock running, after reset uo_out {s[0]:#04x} uio {s[1]:#04x}")
     panel = Panel(a.show)
     total, t0 = 0, time.time()
     log = []
@@ -170,7 +174,7 @@ def main():
             msac_host.run(msac_host.clear_counters(), p)
             got = msac_host.run(msac_host.self_test(kind, n, row, cnt, upd, count), p)
             exp = msac_model.bist_signature(kind, n, row, cnt, upd, count)
-            syms, clks = msac_host.run(msac_host.read_counters(), p)
+            syms, clks, busy = msac_host.run(msac_host.read_counters(), p)
             ok = got == exp and syms == count
             line = f"{'PASS' if ok else 'FAIL'} self-test {name}: {got:#010x} (model {exp:#010x}), {syms} symbols in {clks} clocks"
             print(line, flush=True)
